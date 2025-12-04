@@ -16,25 +16,32 @@ class UserSerializer(serializers.ModelSerializer):
 
 class LoginSerializer(serializers.Serializer):
     """Login serializer for admin authentication"""
-    username = serializers.CharField()
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
     def validate(self, data):
-        username = data.get('username')
+        email = data.get('email')
         password = data.get('password')
 
-        if username and password:
-            user = authenticate(username=username, password=password)
-            if user:
-                if not user.is_superuser:
-                    raise serializers.ValidationError("Only admins can access this interface.")
-                if not user.is_active:
-                    raise serializers.ValidationError("User account is disabled.")
-                data['user'] = user
-            else:
+        if email and password:
+            # Try to find user by email
+            try:
+                from django.contrib.auth.models import User
+                user = User.objects.get(email=email)
+                # Authenticate using the username (which might be email) and password
+                user = authenticate(username=user.username, password=password)
+                if user:
+                    if not user.is_superuser:
+                        raise serializers.ValidationError("Only admins can access this interface.")
+                    if not user.is_active:
+                        raise serializers.ValidationError("User account is disabled.")
+                    data['user'] = user
+                else:
+                    raise serializers.ValidationError("Invalid credentials.")
+            except User.DoesNotExist:
                 raise serializers.ValidationError("Invalid credentials.")
         else:
-            raise serializers.ValidationError("Must include username and password.")
+            raise serializers.ValidationError("Must include email and password.")
         
         return data
 
@@ -431,30 +438,59 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
 class JobSerializer(serializers.ModelSerializer):
     """Serializer for Job model"""
     assigned_to_username = serializers.SerializerMethodField()
+    service_industry_name = serializers.SerializerMethodField()
     
     class Meta:
         model = Job
-        fields = ['id', 'name', 'status', 'price', 'assigned_to', 'assigned_to_username', 'created_at', 'updated_at']
-        read_only_fields = ['id', 'assigned_to', 'assigned_to_username', 'created_at', 'updated_at']
+        fields = [
+            'id', 'name', 'status', 'price', 'assigned_to', 'assigned_to_username',
+            'service_area', 'service_needed', 'service_request_message',
+            'contact_id', 'first_name', 'last_name', 'full_name', 'email', 'phone',
+            'address1', 'city', 'state', 'country', 'postal_code', 'company_name',
+            'service_industry', 'service_industry_name',
+            'created_at', 'updated_at'
+        ]
+        read_only_fields = [
+            'id', 'assigned_to', 'assigned_to_username', 'service_industry_name',
+            'created_at', 'updated_at'
+        ]
     
     def get_assigned_to_username(self, obj):
         """Get username of assigned user"""
         return obj.assigned_to.username if obj.assigned_to else None
+    
+    def get_service_industry_name(self, obj):
+        """Get name of matching service industry"""
+        return obj.service_industry.name if obj.service_industry else None
 
 
 class JobWebhookSerializer(serializers.Serializer):
-    """Serializer for job webhook payload"""
-    name = serializers.CharField(max_length=255, help_text="Name of the job")
-    status = serializers.ChoiceField(
-        choices=Job.STATUS_CHOICES,
-        default='pending',
-        help_text="Status of the job"
-    )
-    price = serializers.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        help_text="Price for this job"
-    )
+    """Serializer for job webhook payload - handles both space and underscore field names"""
+    # Handle field names with spaces (from webhook) - map to underscore versions
+    def to_internal_value(self, data):
+        # Map webhook field names (with spaces) to internal field names (with underscores)
+        mapped_data = {}
+        for key, value in data.items():
+            # Map "Service Area" to "Service_Area", etc.
+            mapped_key = key.replace(' ', '_')
+            mapped_data[mapped_key] = value
+        return super().to_internal_value(mapped_data)
+    
+    Service_Area = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Service Area")
+    Service_Needed = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Service Needed")
+    Service_Request_Message = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Service Request Message")
+    contact_id = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="GHL Contact ID")
+    first_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    last_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    full_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    address1 = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    city = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    state = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    country = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    postal_code = serializers.CharField(required=False, allow_blank=True, allow_null=True, help_text="Postal code")
+    company_name = serializers.CharField(required=False, allow_blank=True, allow_null=True)
 
 
 class AcceptJobSerializer(serializers.Serializer):

@@ -47,12 +47,26 @@ class UserProfileAdmin(admin.ModelAdmin):
 @admin.register(Job)
 class JobAdmin(admin.ModelAdmin):
     """Admin interface for Job model"""
-    list_display = ['id', 'name', 'status', 'price', 'assigned_to', 'created_at', 'updated_at']
-    list_filter = ['status', 'assigned_to', 'created_at']
-    search_fields = ['name', 'assigned_to__username', 'assigned_to__email']
+    list_display = ['id', 'service_needed', 'service_area', 'status', 'price', 'assigned_to', 'postal_code', 'created_at']
+    list_filter = ['status', 'assigned_to', 'service_area', 'created_at']
+    search_fields = ['service_needed', 'service_area', 'postal_code', 'email', 'phone', 'full_name', 'assigned_to__username', 'assigned_to__email']
     list_editable = ['status']
     ordering = ['-created_at']
     readonly_fields = ['created_at', 'updated_at']
+    fieldsets = (
+        ('Job Information', {
+            'fields': ('name', 'service_needed', 'service_area', 'status', 'price', 'service_industry', 'assigned_to')
+        }),
+        ('Contact Information', {
+            'fields': ('contact_id', 'first_name', 'last_name', 'full_name', 'email', 'phone', 'company_name')
+        }),
+        ('Address Information', {
+            'fields': ('address1', 'city', 'state', 'country', 'postal_code')
+        }),
+        ('Additional Information', {
+            'fields': ('service_request_message', 'created_at', 'updated_at')
+        }),
+    )
 
 
 @admin.register(JobRejection)

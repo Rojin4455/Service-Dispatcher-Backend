@@ -877,24 +877,74 @@ class JobWebhookView(APIView):
         Webhook to receive and save jobs
         Expected payload:
         {
-            "name": "Window Cleaning",
-            "status": "pending",
-            "price": 50.00
+            "Service Area": "Test Area 1",
+            "Service Needed": "Chimney Inspection",
+            "Service Request Message": "this is test message",
+            "contact_id": "InZOJpwnZaAPxCpDpUH5",
+            "first_name": "Test",
+            "last_name": "test",
+            "full_name": "Test test",
+            "email": "tech@testtest.com",
+            "phone": "+97192121234",
+            "address1": "Texas Roadhouse, South 24th Street",
+            "city": "Council Bluffs",
+            "state": "Iowa",
+            "country": "US",
+            "postal_code": "51501",
+            "company_name": "test business name"
         }
         """
         try:
             serializer = JobWebhookSerializer(data=request.data)
             if serializer.is_valid():
-                # Create job with status pending (unassigned)
+                validated_data = serializer.validated_data
+                
+                # Get service area and service needed
+                service_area = validated_data.get('Service_Area', '')
+                service_needed = validated_data.get('Service_Needed', '')
+                
+                # Find matching service industry by name
+                service_industry = None
+                price = Decimal('0.00')
+                
+                if service_needed:
+                    try:
+                        service_industry = ServiceIndustry.objects.get(name=service_needed, is_active=True)
+                        price = service_industry.price
+                    except ServiceIndustry.DoesNotExist:
+                        logger.warning(f"Service industry '{service_needed}' not found. Using default price 0.00")
+                    except ServiceIndustry.MultipleObjectsReturned:
+                        # If multiple found, use the first one
+                        service_industry = ServiceIndustry.objects.filter(name=service_needed, is_active=True).first()
+                        if service_industry:
+                            price = service_industry.price
+                
+                # Create job with all fields
                 job = Job.objects.create(
-                    name=serializer.validated_data['name'],
-                    status=serializer.validated_data['status'],
-                    price=serializer.validated_data['price'],
-                    assigned_to=None  # Initially unassigned
+                    name=service_needed or 'Unnamed Job',  # Use Service Needed as name
+                    status='pending',
+                    price=price,
+                    assigned_to=None,  # Initially unassigned
+                    service_area=service_area,
+                    service_needed=service_needed,
+                    service_request_message=validated_data.get('Service_Request_Message', ''),
+                    contact_id=validated_data.get('contact_id', ''),
+                    first_name=validated_data.get('first_name', ''),
+                    last_name=validated_data.get('last_name', ''),
+                    full_name=validated_data.get('full_name', ''),
+                    email=validated_data.get('email', ''),
+                    phone=validated_data.get('phone', ''),
+                    address1=validated_data.get('address1', ''),
+                    city=validated_data.get('city', ''),
+                    state=validated_data.get('state', ''),
+                    country=validated_data.get('country', ''),
+                    postal_code=validated_data.get('postal_code', ''),
+                    company_name=validated_data.get('company_name', ''),
+                    service_industry=service_industry
                 )
                 
                 logger.info(
-                    f"Job created via webhook: {job.name} - Status: {job.status} - Price: {job.price}"
+                    f"Job created via webhook: {job.service_needed} - Service Area: {job.service_area} - Price: {job.price}"
                 )
                 
                 return Response({
@@ -914,27 +964,78 @@ class JobWebhookView(APIView):
 
 
 class PendingJobsView(APIView):
-    """View to get all pending jobs (unassigned jobs) excluding rejected ones"""
+    """View to get all pending jobs matching user's service areas, industries, and pincodes"""
     permission_classes = [IsAuthenticatedUser]
     
     def get(self, request):
-        """Get all pending jobs that are not assigned to any user and not rejected by current user"""
+        """Get all pending jobs that match user's criteria and not rejected by current user"""
         try:
+            # Get user profile
+            try:
+                profile = request.user.profile
+            except UserProfile.DoesNotExist:
+                return Response(
+                    {'error': 'User profile not found. Please complete your profile.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
             # Get IDs of jobs rejected by current user
             rejected_job_ids = JobRejection.objects.filter(
                 user=request.user
             ).values_list('job_id', flat=True)
             
-            # Get all jobs that are pending, not assigned, and not rejected by current user
+            # Get user's service areas, industries, and pincodes
+            user_service_areas = profile.service_areas.values_list('name', flat=True)
+            user_service_industries = profile.service_industries.values_list('name', flat=True)
+            user_pincodes = [str(pincode) for pincode in profile.pincodes] if profile.pincodes else []
+            
+            # Start with pending, unassigned jobs, excluding rejected ones
             pending_jobs = Job.objects.filter(
                 status='pending',
                 assigned_to__isnull=True
-            ).exclude(id__in=rejected_job_ids).order_by('-created_at')
+            ).exclude(id__in=rejected_job_ids)
             
-            serializer = JobSerializer(pending_jobs, many=True)
+            # Filter jobs that match user's criteria
+            matching_jobs = []
+            for job in pending_jobs:
+                # Check service area match
+                service_area_match = False
+                if job.service_area:
+                    if job.service_area in user_service_areas:
+                        service_area_match = True
+                else:
+                    # If job has no service area, consider it a match
+                    service_area_match = True
+                
+                # Check service needed (industry) match
+                service_needed_match = False
+                if job.service_needed:
+                    if job.service_needed in user_service_industries:
+                        service_needed_match = True
+                else:
+                    # If job has no service needed, consider it a match
+                    service_needed_match = True
+                
+                # Check postal code match
+                postal_code_match = False
+                if job.postal_code:
+                    if job.postal_code in user_pincodes:
+                        postal_code_match = True
+                else:
+                    # If job has no postal code, consider it a match
+                    postal_code_match = True
+                
+                # Job matches if all criteria match (or are empty)
+                if service_area_match and service_needed_match and postal_code_match:
+                    matching_jobs.append(job)
+            
+            # Order by creation date (newest first)
+            matching_jobs.sort(key=lambda x: x.created_at, reverse=True)
+            
+            serializer = JobSerializer(matching_jobs, many=True)
             return Response({
                 'jobs': serializer.data,
-                'count': pending_jobs.count()
+                'count': len(matching_jobs)
             }, status=status.HTTP_200_OK)
             
         except Exception as e:
@@ -1015,12 +1116,25 @@ class AcceptJobView(APIView):
                     status=status.HTTP_400_BAD_REQUEST
                 )
             
+            # Get the price from service industry (if available) or use job price
+            job_price = job.price
+            if job.service_industry:
+                job_price = job.service_industry.price
+                # Also verify the user has this service industry
+                if job.service_industry not in profile.service_industries.all():
+                    return Response(
+                        {
+                            'error': f'You do not have access to service industry: {job.service_industry.name}'
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+            
             # Check if user has sufficient wallet balance
-            if profile.wallet_balance < job.price:
+            if profile.wallet_balance < job_price:
                 return Response(
                     {
                         'error': 'Insufficient wallet balance.',
-                        'required': str(job.price),
+                        'required': str(job_price),
                         'current_balance': str(profile.wallet_balance)
                     },
                     status=status.HTTP_400_BAD_REQUEST
@@ -1048,12 +1162,17 @@ class AcceptJobView(APIView):
                 # Refresh profile to get latest wallet balance
                 profile.refresh_from_db()
                 
+                # Get the price from service industry (if available) or use job price
+                job_price = job.price
+                if job.service_industry:
+                    job_price = job.service_industry.price
+                
                 # Re-check wallet balance (in case it changed)
-                if profile.wallet_balance < job.price:
+                if profile.wallet_balance < job_price:
                     return Response(
                         {
                             'error': 'Insufficient wallet balance.',
-                            'required': str(job.price),
+                            'required': str(job_price),
                             'current_balance': str(profile.wallet_balance)
                         },
                         status=status.HTTP_400_BAD_REQUEST
@@ -1065,13 +1184,14 @@ class AcceptJobView(APIView):
                 job.status = 'accepted'
                 job.save()
                 
-                # Deduct price from wallet
-                profile.wallet_balance -= job.price
+                # Deduct price from wallet (use service industry price)
+                profile.wallet_balance -= job_price
                 profile.save(update_fields=['wallet_balance'])
                 
                 logger.info(
-                    f"Job {job.id} ({job.name}) accepted by user {request.user.email}. "
-                    f"Price deducted: {job.price}. Old balance: {old_balance}, New balance: {profile.wallet_balance}"
+                    f"Job {job.id} ({job.service_needed}) accepted by user {request.user.email}. "
+                    f"Price deducted: {job_price} (from service industry: {job.service_industry.name if job.service_industry else 'N/A'}). "
+                    f"Old balance: {old_balance}, New balance: {profile.wallet_balance}"
                 )
                 
                 # Sync custom fields to GHL (especially wallet balance)
@@ -1086,12 +1206,15 @@ class AcceptJobView(APIView):
                     # Log error but don't fail the job acceptance
                     logger.error(f"Error syncing custom fields after job acceptance: {str(e)}")
             
+            # Get final price used
+            final_price = job.service_industry.price if job.service_industry else job.price
+            
             return Response({
                 'success': True,
                 'message': 'Job accepted successfully',
                 'job': JobSerializer(job).data,
                 'wallet_balance': str(profile.wallet_balance),
-                'amount_deducted': str(job.price)
+                'amount_deducted': str(final_price)
             }, status=status.HTTP_200_OK)
             
         except Exception as e:

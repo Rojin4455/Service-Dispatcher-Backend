@@ -156,7 +156,8 @@ class Job(models.Model):
         ('cancelled', 'Cancelled'),
     ]
     
-    name = models.CharField(max_length=255, help_text="Name of the job")
+    # Job identification
+    name = models.CharField(max_length=255, help_text="Name of the job (Service Needed)")
     status = models.CharField(
         max_length=20,
         choices=STATUS_CHOICES,
@@ -166,7 +167,7 @@ class Job(models.Model):
     price = models.DecimalField(
         max_digits=10,
         decimal_places=2,
-        help_text="Price for this job"
+        help_text="Price for this job (from matching service industry)"
     )
     assigned_to = models.ForeignKey(
         User,
@@ -176,6 +177,34 @@ class Job(models.Model):
         related_name='assigned_jobs',
         help_text="User assigned to this job (null means pending)"
     )
+    
+    # Webhook payload fields
+    service_area = models.CharField(max_length=255, blank=True, null=True, help_text="Service Area from webhook")
+    service_needed = models.CharField(max_length=255, blank=True, null=True, help_text="Service Needed from webhook")
+    service_request_message = models.TextField(blank=True, null=True, help_text="Service Request Message")
+    contact_id = models.CharField(max_length=255, blank=True, null=True, help_text="GHL Contact ID")
+    first_name = models.CharField(max_length=255, blank=True, null=True)
+    last_name = models.CharField(max_length=255, blank=True, null=True)
+    full_name = models.CharField(max_length=255, blank=True, null=True)
+    email = models.EmailField(blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    address1 = models.CharField(max_length=500, blank=True, null=True)
+    city = models.CharField(max_length=255, blank=True, null=True)
+    state = models.CharField(max_length=255, blank=True, null=True)
+    country = models.CharField(max_length=255, blank=True, null=True)
+    postal_code = models.CharField(max_length=20, blank=True, null=True, help_text="Postal code for matching with user pincodes")
+    company_name = models.CharField(max_length=255, blank=True, null=True)
+    
+    # Reference to matching service industry (for price lookup)
+    service_industry = models.ForeignKey(
+        'ServiceIndustry',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='jobs',
+        help_text="Matching service industry for this job"
+    )
+    
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
     
@@ -186,11 +215,13 @@ class Job(models.Model):
         indexes = [
             models.Index(fields=['status', 'assigned_to']),
             models.Index(fields=['assigned_to']),
+            models.Index(fields=['service_area', 'service_needed', 'postal_code']),
+            models.Index(fields=['postal_code']),
         ]
     
     def __str__(self):
         assigned_user = self.assigned_to.username if self.assigned_to else "Unassigned"
-        return f"{self.name} - {self.status} - {assigned_user}"
+        return f"{self.service_needed} - {self.status} - {assigned_user}"
 
 
 class JobRejection(models.Model):
