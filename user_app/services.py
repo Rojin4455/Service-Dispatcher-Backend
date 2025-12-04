@@ -149,13 +149,14 @@ def search_ghl_contact(email=None, phone=None, location_id=None):
     return None
 
 
-def create_ghl_contact(contact_data, location_id=None):
+def create_ghl_contact(contact_data, location_id=None, tags=None):
     """
     Create a new contact in GHL using upsert API
     
     Args:
         contact_data: Dictionary containing contact information (should NOT include 'id')
         location_id: GHL location ID (optional, uses config if not provided)
+        tags: List of tags to add to the contact (optional)
     
     Returns:
         dict: Created contact data, None if error
@@ -186,6 +187,10 @@ def create_ghl_contact(contact_data, location_id=None):
         if 'createNewIfDuplicateAllowed' not in contact_data_clean:
             contact_data_clean['createNewIfDuplicateAllowed'] = False
         
+        # Add tags if provided
+        if tags is not None:
+            contact_data_clean['tags'] = tags
+        
         response = requests.post(url, headers=headers, json=contact_data_clean, timeout=10)
         response.raise_for_status()
         
@@ -202,6 +207,47 @@ def create_ghl_contact(contact_data, location_id=None):
         return None
     except Exception as e:
         logger.error(f"Unexpected error creating GHL contact: {str(e)}")
+        return None
+
+
+def get_ghl_contact(ghl_contact_id):
+    """
+    Get a contact from GHL by ID
+    
+    Args:
+        ghl_contact_id: GHL contact ID
+    
+    Returns:
+        dict: Contact data if found, None otherwise
+    """
+    if not ghl_contact_id:
+        logger.error("GHL contact ID not provided")
+        return None
+    
+    try:
+        url = f"{GHL_BASE_URL}/contacts/{ghl_contact_id}"
+        headers = {
+            'Accept': 'application/json',
+            'Version': GHL_API_VERSION,
+            'Authorization': f'Bearer {GHL_TOKEN}'
+        }
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        
+        return response.json()
+        
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Error getting GHL contact: {str(e)}")
+        if hasattr(e, 'response') and e.response is not None:
+            try:
+                error_detail = e.response.json()
+                logger.error(f"GHL API error details: {error_detail}")
+            except:
+                logger.error(f"GHL API error response: {e.response.text}")
+        return None
+    except Exception as e:
+        logger.error(f"Unexpected error getting GHL contact: {str(e)}")
         return None
 
 
@@ -254,6 +300,7 @@ def update_ghl_contact(ghl_contact_id, contact_data):
 def sync_user_to_ghl(user_profile, location_id=None, save_contact_id=True):
     """
     Sync a user profile to GHL (search first, then update or create)
+    Also syncs custom fields and adds "client" tag
     
     Args:
         user_profile: UserProfile instance
@@ -267,6 +314,7 @@ def sync_user_to_ghl(user_profile, location_id=None, save_contact_id=True):
     
     # Determine contact ID - prioritize saved ID, then search
     contact_id = None
+    is_new_contact = False
     if user_profile.ghl_contact_id:
         contact_id = user_profile.ghl_contact_id
     else:
@@ -278,6 +326,8 @@ def sync_user_to_ghl(user_profile, location_id=None, save_contact_id=True):
         )
         if existing_contact and existing_contact.get('id'):
             contact_id = existing_contact['id']
+        else:
+            is_new_contact = True
     
     # Prepare contact data (without 'id' field)
     contact_data = {
@@ -288,18 +338,41 @@ def sync_user_to_ghl(user_profile, location_id=None, save_contact_id=True):
         'phone': user_profile.phone,
     }
     
+    # Handle tags - "client" tag should be added
+    tags = ['client']
+    
     # Update existing contact or create new one
     if contact_id:
-        # Use update API for existing contact
+        # For existing contact, fetch current tags and add "client" if not present
+        existing_contact_data = get_ghl_contact(contact_id)
+        if existing_contact_data:
+            existing_tags = existing_contact_data.get('tags', [])
+            # Extract tag names if tags are objects with 'name' property, or use as-is if they're strings
+            if existing_tags:
+                tag_names = []
+                for tag in existing_tags:
+                    if isinstance(tag, dict) and 'name' in tag:
+                        tag_names.append(tag['name'])
+                    elif isinstance(tag, str):
+                        tag_names.append(tag)
+                
+                # Add "client" tag if not already present
+                if 'client' not in tag_names:
+                    tag_names.append('client')
+                tags = tag_names
+        
+        # Update contact with tags
+        contact_data['tags'] = tags
         result = update_ghl_contact(contact_id, contact_data)
+        
         if result and save_contact_id and not user_profile.ghl_contact_id:
             # Save contact ID if not already saved
             user_profile.ghl_contact_id = contact_id
             user_profile.save(update_fields=['ghl_contact_id'])
             logger.info(f"Saved GHL contact ID {contact_id} for user {user.email}")
     else:
-        # Use create API for new contact
-        result = create_ghl_contact(contact_data, location_id)
+        # Use create API for new contact with "client" tag
+        result = create_ghl_contact(contact_data, location_id, tags=tags)
         
         # Extract and save contact ID from response
         if result and save_contact_id:
@@ -312,9 +385,25 @@ def sync_user_to_ghl(user_profile, location_id=None, save_contact_id=True):
                     contact_id_from_response = result.get('id')
             
             if contact_id_from_response:
-                user_profile.ghl_contact_id = contact_id_from_response
+                contact_id = contact_id_from_response
+                user_profile.ghl_contact_id = contact_id
                 user_profile.save(update_fields=['ghl_contact_id'])
-                logger.info(f"Saved GHL contact ID {contact_id_from_response} for user {user.email}")
+                logger.info(f"Saved GHL contact ID {contact_id} for user {user.email}")
+    
+    # After creating/updating contact, sync custom fields
+    if result and contact_id:
+        # Ensure contact_id is set in profile for custom fields sync
+        if not user_profile.ghl_contact_id:
+            user_profile.ghl_contact_id = contact_id
+            user_profile.save(update_fields=['ghl_contact_id'])
+        
+        # Sync custom fields (service areas, industries, wallet balance, pincodes)
+        try:
+            sync_profile_custom_fields_to_ghl(user_profile)
+            logger.info(f"Synced custom fields to GHL for user {user.email}")
+        except Exception as e:
+            logger.error(f"Error syncing custom fields to GHL for user {user.email}: {str(e)}")
+            # Don't fail the entire sync if custom fields fail
     
     return result
 
