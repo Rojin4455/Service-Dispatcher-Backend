@@ -16,7 +16,13 @@ from .views import (
     AdminUserDetailView,
     WalletRechargeWebhookView,
     PasswordResetRequestView,
-    PasswordResetConfirmView
+    PasswordResetConfirmView,
+    JobWebhookView,
+    PendingJobsView,
+    MyJobsView,
+    AcceptJobView,
+    RejectJobView,
+    UpdateJobStatusView
 )
 
 # Create a router and register our viewsets
@@ -46,6 +52,14 @@ urlpatterns = [
     
     # Webhook endpoints
     path('webhook/wallet-recharge/', WalletRechargeWebhookView.as_view(), name='wallet-recharge-webhook'),
+    path('webhook/job/', JobWebhookView.as_view(), name='job-webhook'),
+    
+    # Job endpoints
+    path('jobs/pending/', PendingJobsView.as_view(), name='pending-jobs'),
+    path('jobs/my-jobs/', MyJobsView.as_view(), name='my-jobs'),
+    path('jobs/accept/', AcceptJobView.as_view(), name='accept-job'),
+    path('jobs/reject/', RejectJobView.as_view(), name='reject-job'),
+    path('jobs/update-status/', UpdateJobStatusView.as_view(), name='update-job-status'),
     
     # Admin user management endpoints
     path('admin/users/', AdminUserListView.as_view(), name='admin-user-list'),

@@ -145,3 +145,78 @@ class PasswordResetOTP(models.Model):
             otp=otp_code,
             expires_at=expires_at
         )
+
+
+class Job(models.Model):
+    """Model for jobs received from webhook"""
+    STATUS_CHOICES = [
+        ('pending', 'Pending'),
+        ('accepted', 'Accepted'),
+        ('completed', 'Completed'),
+        ('cancelled', 'Cancelled'),
+    ]
+    
+    name = models.CharField(max_length=255, help_text="Name of the job")
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default='pending',
+        help_text="Status of the job"
+    )
+    price = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Price for this job"
+    )
+    assigned_to = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='assigned_jobs',
+        help_text="User assigned to this job (null means pending)"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = "Job"
+        verbose_name_plural = "Jobs"
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['status', 'assigned_to']),
+            models.Index(fields=['assigned_to']),
+        ]
+    
+    def __str__(self):
+        assigned_user = self.assigned_to.username if self.assigned_to else "Unassigned"
+        return f"{self.name} - {self.status} - {assigned_user}"
+
+
+class JobRejection(models.Model):
+    """Model to track jobs rejected by users"""
+    job = models.ForeignKey(
+        Job,
+        on_delete=models.CASCADE,
+        related_name='rejections',
+        help_text="Job that was rejected"
+    )
+    user = models.ForeignKey(
+        User,
+        on_delete=models.CASCADE,
+        related_name='rejected_jobs',
+        help_text="User who rejected the job"
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    
+    class Meta:
+        verbose_name = "Job Rejection"
+        verbose_name_plural = "Job Rejections"
+        unique_together = ['job', 'user']  # A user can only reject a job once
+        indexes = [
+            models.Index(fields=['user', 'job']),
+        ]
+        ordering = ['-created_at']
+    
+    def __str__(self):
+        return f"{self.user.username} rejected {self.job.name}"

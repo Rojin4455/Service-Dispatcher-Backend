@@ -1,5 +1,5 @@
 from django.contrib import admin
-from .models import ServiceArea, ServiceIndustry, UserProfile
+from .models import ServiceArea, ServiceIndustry, UserProfile, Job, JobRejection
 
 # Register your models here.
 
@@ -42,3 +42,24 @@ class UserProfileAdmin(admin.ModelAdmin):
         """Display service industries as comma-separated list"""
         return ", ".join([industry.name for industry in obj.service_industries.all()])
     get_service_industries.short_description = 'Service Industries'
+
+
+@admin.register(Job)
+class JobAdmin(admin.ModelAdmin):
+    """Admin interface for Job model"""
+    list_display = ['id', 'name', 'status', 'price', 'assigned_to', 'created_at', 'updated_at']
+    list_filter = ['status', 'assigned_to', 'created_at']
+    search_fields = ['name', 'assigned_to__username', 'assigned_to__email']
+    list_editable = ['status']
+    ordering = ['-created_at']
+    readonly_fields = ['created_at', 'updated_at']
+
+
+@admin.register(JobRejection)
+class JobRejectionAdmin(admin.ModelAdmin):
+    """Admin interface for JobRejection model"""
+    list_display = ['id', 'job', 'user', 'created_at']
+    list_filter = ['created_at']
+    search_fields = ['job__name', 'user__username', 'user__email']
+    ordering = ['-created_at']
+    readonly_fields = ['created_at']

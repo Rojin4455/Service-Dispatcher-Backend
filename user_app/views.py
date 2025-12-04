@@ -6,11 +6,12 @@ from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
 from .serializers import (
     LoginSerializer, UserSerializer, ServiceAreaSerializer, ServiceIndustrySerializer,
     UserSignupSerializer, UserLoginSerializer, UserProfileDetailSerializer, UserProfileUpdateSerializer,
-    PasswordResetRequestSerializer, PasswordResetConfirmSerializer
+    PasswordResetRequestSerializer, PasswordResetConfirmSerializer, JobSerializer, JobWebhookSerializer, 
+    AcceptJobSerializer, RejectJobSerializer, UpdateJobStatusSerializer
 )
 from rest_framework.views import APIView
 from rest_framework import viewsets
-from .models import ServiceArea, ServiceIndustry, UserProfile, PasswordResetOTP
+from .models import ServiceArea, ServiceIndustry, UserProfile, PasswordResetOTP, Job, JobRejection
 from django.contrib.auth.models import User
 from django.db import transaction
 from django.db.models import ProtectedError
@@ -689,3 +690,431 @@ class PasswordResetConfirmView(APIView):
                 }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
         
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class JobWebhookView(APIView):
+    """Webhook endpoint to receive jobs"""
+    permission_classes = [AllowAny]  # Webhook should be accessible without authentication
+    
+    def post(self, request):
+        """
+        Webhook to receive and save jobs
+        Expected payload:
+        {
+            "name": "Window Cleaning",
+            "status": "pending",
+            "price": 50.00
+        }
+        """
+        try:
+            serializer = JobWebhookSerializer(data=request.data)
+            if serializer.is_valid():
+                # Create job with status pending (unassigned)
+                job = Job.objects.create(
+                    name=serializer.validated_data['name'],
+                    status=serializer.validated_data['status'],
+                    price=serializer.validated_data['price'],
+                    assigned_to=None  # Initially unassigned
+                )
+                
+                logger.info(
+                    f"Job created via webhook: {job.name} - Status: {job.status} - Price: {job.price}"
+                )
+                
+                return Response({
+                    'success': True,
+                    'message': 'Job created successfully',
+                    'job': JobSerializer(job).data
+                }, status=status.HTTP_201_CREATED)
+            
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+        except Exception as e:
+            logger.error(f"Error processing job webhook: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'An error occurred while processing the webhook: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class PendingJobsView(APIView):
+    """View to get all pending jobs (unassigned jobs) excluding rejected ones"""
+    permission_classes = [IsAuthenticatedUser]
+    
+    def get(self, request):
+        """Get all pending jobs that are not assigned to any user and not rejected by current user"""
+        try:
+            # Get IDs of jobs rejected by current user
+            rejected_job_ids = JobRejection.objects.filter(
+                user=request.user
+            ).values_list('job_id', flat=True)
+            
+            # Get all jobs that are pending, not assigned, and not rejected by current user
+            pending_jobs = Job.objects.filter(
+                status='pending',
+                assigned_to__isnull=True
+            ).exclude(id__in=rejected_job_ids).order_by('-created_at')
+            
+            serializer = JobSerializer(pending_jobs, many=True)
+            return Response({
+                'jobs': serializer.data,
+                'count': pending_jobs.count()
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error fetching pending jobs: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'An error occurred while fetching pending jobs: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class MyJobsView(APIView):
+    """View to get all jobs assigned to the current user"""
+    permission_classes = [IsAuthenticatedUser]
+    
+    def get(self, request):
+        """Get all jobs assigned to the current user"""
+        try:
+            # Get all jobs assigned to the current user
+            my_jobs = Job.objects.filter(
+                assigned_to=request.user
+            ).order_by('-created_at')
+            
+            serializer = JobSerializer(my_jobs, many=True)
+            return Response({
+                'jobs': serializer.data,
+                'count': my_jobs.count()
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error fetching user jobs: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'An error occurred while fetching your jobs: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AcceptJobView(APIView):
+    """View to accept a job (assign it to the current user and deduct price from wallet)"""
+    permission_classes = [IsAuthenticatedUser]
+    
+    def post(self, request):
+        """
+        Accept a job
+        Expected payload:
+        {
+            "job_id": 1
+        }
+        """
+        try:
+            serializer = AcceptJobSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            job_id = serializer.validated_data['job_id']
+            
+            # Get user profile first (outside transaction)
+            try:
+                profile = request.user.profile
+            except UserProfile.DoesNotExist:
+                return Response(
+                    {'error': 'User profile not found. Please complete your profile.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Do initial validation checks (outside transaction)
+            try:
+                job = Job.objects.get(id=job_id)
+            except Job.DoesNotExist:
+                return Response(
+                    {'error': 'Job not found.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Check if job status is pending
+            if job.status != 'pending':
+                return Response(
+                    {'error': f'This job cannot be accepted. Current status: {job.status}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check if user has sufficient wallet balance
+            if profile.wallet_balance < job.price:
+                return Response(
+                    {
+                        'error': 'Insufficient wallet balance.',
+                        'required': str(job.price),
+                        'current_balance': str(profile.wallet_balance)
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Accept the job and deduct price from wallet within a transaction
+            with transaction.atomic():
+                # Lock the job row to prevent race conditions
+                job = Job.objects.select_for_update().get(id=job_id)
+                
+                # Re-check if job is already assigned (in case it was assigned between checks)
+                if job.assigned_to is not None:
+                    return Response(
+                        {'error': 'This job has already been accepted by another user.'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Re-check job status
+                if job.status != 'pending':
+                    return Response(
+                        {'error': f'This job cannot be accepted. Current status: {job.status}'},
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Refresh profile to get latest wallet balance
+                profile.refresh_from_db()
+                
+                # Re-check wallet balance (in case it changed)
+                if profile.wallet_balance < job.price:
+                    return Response(
+                        {
+                            'error': 'Insufficient wallet balance.',
+                            'required': str(job.price),
+                            'current_balance': str(profile.wallet_balance)
+                        },
+                        status=status.HTTP_400_BAD_REQUEST
+                    )
+                
+                # Assign job to user and update status
+                old_balance = profile.wallet_balance
+                job.assigned_to = request.user
+                job.status = 'accepted'
+                job.save()
+                
+                # Deduct price from wallet
+                profile.wallet_balance -= job.price
+                profile.save(update_fields=['wallet_balance'])
+                
+                logger.info(
+                    f"Job {job.id} ({job.name}) accepted by user {request.user.email}. "
+                    f"Price deducted: {job.price}. Old balance: {old_balance}, New balance: {profile.wallet_balance}"
+                )
+                
+                # Sync custom fields to GHL (especially wallet balance)
+                try:
+                    from .services import sync_profile_custom_fields_to_ghl
+                    ghl_custom_fields = sync_profile_custom_fields_to_ghl(profile)
+                    if ghl_custom_fields:
+                        logger.info(f"Successfully synced custom fields after job acceptance for user {request.user.email}")
+                    else:
+                        logger.warning(f"Failed to sync custom fields after job acceptance for user {request.user.email}")
+                except Exception as e:
+                    # Log error but don't fail the job acceptance
+                    logger.error(f"Error syncing custom fields after job acceptance: {str(e)}")
+            
+            return Response({
+                'success': True,
+                'message': 'Job accepted successfully',
+                'job': JobSerializer(job).data,
+                'wallet_balance': str(profile.wallet_balance),
+                'amount_deducted': str(job.price)
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error accepting job: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'An error occurred while accepting the job: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class RejectJobView(APIView):
+    """View to reject a job (mark it as rejected for the current user)"""
+    permission_classes = [IsAuthenticatedUser]
+    
+    def post(self, request):
+        """
+        Reject a job
+        Expected payload:
+        {
+            "job_id": 1
+        }
+        """
+        try:
+            serializer = RejectJobSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            job_id = serializer.validated_data['job_id']
+            
+            # Get the job
+            try:
+                job = Job.objects.get(id=job_id)
+            except Job.DoesNotExist:
+                return Response(
+                    {'error': 'Job not found.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Check if job is already assigned
+            if job.assigned_to is not None:
+                return Response(
+                    {'error': 'Cannot reject a job that has already been accepted.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check if job status is pending
+            if job.status != 'pending':
+                return Response(
+                    {'error': f'Cannot reject a job with status: {job.status}'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Check if user has already rejected this job
+            if JobRejection.objects.filter(job=job, user=request.user).exists():
+                return Response(
+                    {'error': 'You have already rejected this job.'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Create rejection record
+            rejection = JobRejection.objects.create(
+                job=job,
+                user=request.user
+            )
+            
+            logger.info(
+                f"Job {job.id} ({job.name}) rejected by user {request.user.email}"
+            )
+            
+            return Response({
+                'success': True,
+                'message': 'Job rejected successfully',
+                'job_id': job.id,
+                'job_name': job.name
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error rejecting job: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'An error occurred while rejecting the job: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class UpdateJobStatusView(APIView):
+    """View to update the status of an accepted job"""
+    permission_classes = [IsAuthenticatedUser]
+    
+    def post(self, request):
+        """
+        Update job status
+        Expected payload:
+        {
+            "job_id": 1,
+            "status": "completed"  or "cancelled"
+        }
+        """
+        try:
+            serializer = UpdateJobStatusSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            job_id = serializer.validated_data['job_id']
+            new_status = serializer.validated_data['status']
+            
+            # Get the job
+            try:
+                job = Job.objects.get(id=job_id)
+            except Job.DoesNotExist:
+                return Response(
+                    {'error': 'Job not found.'},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Check if job is assigned to current user
+            if job.assigned_to != request.user:
+                return Response(
+                    {'error': 'You can only update the status of jobs assigned to you.'},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+            
+            # Check if job is in accepted status (only accepted jobs can be updated)
+            if job.status != 'accepted':
+                return Response(
+                    {
+                        'error': f'Job status can only be updated from "accepted". Current status: {job.status}'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Validate status transition (only allow completed or cancelled)
+            if new_status not in ['completed', 'cancelled']:
+                return Response(
+                    {
+                        'error': f'Status can only be changed to "completed" or "cancelled". Provided: {new_status}'
+                    },
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+            
+            # Update job status
+            old_status = job.status
+            job.status = new_status
+            job.save()
+            
+            logger.info(
+                f"Job {job.id} ({job.name}) status updated from {old_status} to {new_status} by user {request.user.email}"
+            )
+            
+            # If job is cancelled, refund the price to user's wallet
+            if new_status == 'cancelled':
+                try:
+                    profile = request.user.profile
+                    with transaction.atomic():
+                        old_balance = profile.wallet_balance
+                        profile.wallet_balance += job.price
+                        profile.save(update_fields=['wallet_balance'])
+                        
+                        logger.info(
+                            f"Job {job.id} cancelled. Refunded {job.price} to user {request.user.email}. "
+                            f"Old balance: {old_balance}, New balance: {profile.wallet_balance}"
+                        )
+                        
+                        # Sync custom fields to GHL (especially wallet balance)
+                        try:
+                            from .services import sync_profile_custom_fields_to_ghl
+                            ghl_custom_fields = sync_profile_custom_fields_to_ghl(profile)
+                            if ghl_custom_fields:
+                                logger.info(f"Successfully synced custom fields after job cancellation for user {request.user.email}")
+                            else:
+                                logger.warning(f"Failed to sync custom fields after job cancellation for user {request.user.email}")
+                        except Exception as e:
+                            # Log error but don't fail the status update
+                            logger.error(f"Error syncing custom fields after job cancellation: {str(e)}")
+                        
+                        return Response({
+                            'success': True,
+                            'message': 'Job status updated and amount refunded to wallet',
+                            'job': JobSerializer(job).data,
+                            'wallet_balance': str(profile.wallet_balance),
+                            'amount_refunded': str(job.price)
+                        }, status=status.HTTP_200_OK)
+                        
+                except UserProfile.DoesNotExist:
+                    logger.warning(f"User profile not found for refund. Job status updated but refund failed.")
+                    return Response({
+                        'success': True,
+                        'message': 'Job status updated, but refund failed (profile not found)',
+                        'job': JobSerializer(job).data
+                    }, status=status.HTTP_200_OK)
+            
+            return Response({
+                'success': True,
+                'message': 'Job status updated successfully',
+                'job': JobSerializer(job).data
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            logger.error(f"Error updating job status: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'An error occurred while updating job status: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )

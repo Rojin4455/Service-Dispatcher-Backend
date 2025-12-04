@@ -3,7 +3,7 @@ from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
-from .models import ServiceArea, ServiceIndustry, UserProfile, PasswordResetOTP
+from .models import ServiceArea, ServiceIndustry, UserProfile, PasswordResetOTP, Job, JobRejection
 
 class UserSerializer(serializers.ModelSerializer):
     """Serializer for User model"""
@@ -362,3 +362,57 @@ class PasswordResetConfirmSerializer(serializers.Serializer):
             })
         
         return data
+
+
+class JobSerializer(serializers.ModelSerializer):
+    """Serializer for Job model"""
+    assigned_to_username = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Job
+        fields = ['id', 'name', 'status', 'price', 'assigned_to', 'assigned_to_username', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'assigned_to', 'assigned_to_username', 'created_at', 'updated_at']
+    
+    def get_assigned_to_username(self, obj):
+        """Get username of assigned user"""
+        return obj.assigned_to.username if obj.assigned_to else None
+
+
+class JobWebhookSerializer(serializers.Serializer):
+    """Serializer for job webhook payload"""
+    name = serializers.CharField(max_length=255, help_text="Name of the job")
+    status = serializers.ChoiceField(
+        choices=Job.STATUS_CHOICES,
+        default='pending',
+        help_text="Status of the job"
+    )
+    price = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        help_text="Price for this job"
+    )
+
+
+class AcceptJobSerializer(serializers.Serializer):
+    """Serializer for accepting a job"""
+    job_id = serializers.IntegerField(help_text="ID of the job to accept")
+
+
+class RejectJobSerializer(serializers.Serializer):
+    """Serializer for rejecting a job"""
+    job_id = serializers.IntegerField(help_text="ID of the job to reject")
+
+
+class UpdateJobStatusSerializer(serializers.Serializer):
+    """Serializer for updating job status"""
+    job_id = serializers.IntegerField(help_text="ID of the job to update")
+    status = serializers.ChoiceField(
+        choices=Job.STATUS_CHOICES,
+        help_text="New status for the job"
+    )
+    
+    def validate_status(self, value):
+        """Validate that status transition is allowed"""
+        # Users can only change status to 'completed' or 'cancelled' from 'accepted'
+        # This validation will be done in the view to check the current status
+        return value
