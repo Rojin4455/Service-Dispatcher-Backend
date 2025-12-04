@@ -7,7 +7,8 @@ from .serializers import (
     LoginSerializer, UserSerializer, ServiceAreaSerializer, ServiceIndustrySerializer,
     UserSignupSerializer, UserLoginSerializer, UserProfileDetailSerializer, UserProfileUpdateSerializer,
     PasswordResetRequestSerializer, PasswordResetConfirmSerializer, JobSerializer, JobWebhookSerializer, 
-    AcceptJobSerializer, RejectJobSerializer, UpdateJobStatusSerializer
+    AcceptJobSerializer, RejectJobSerializer, UpdateJobStatusSerializer, BulkServiceAreaSerializer,
+    BulkServiceIndustrySerializer
 )
 from rest_framework.views import APIView
 from rest_framework import viewsets
@@ -140,6 +141,181 @@ class PublicServiceIndustryListView(APIView):
         service_industries = ServiceIndustry.objects.filter(is_active=True).order_by('name')
         serializer = ServiceIndustrySerializer(service_industries, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+class BulkCreateServiceAreaView(APIView):
+    """View to bulk create service areas"""
+    permission_classes = [IsAdminPermission]
+    
+    def post(self, request):
+        """
+        Bulk create service areas
+        Expected payload:
+        {
+            "service_areas": [
+                {"name": "Area 1", "is_active": true},
+                {"name": "Area 2", "is_active": true},
+                {"name": "Area 3"}
+            ]
+        }
+        """
+        try:
+            serializer = BulkServiceAreaSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            service_areas_data = serializer.validated_data['service_areas']
+            created_areas = []
+            errors = []
+            
+            with transaction.atomic():
+                for item in service_areas_data:
+                    try:
+                        name = item['name']
+                        is_active = item.get('is_active', True)
+                        
+                        # Check if service area already exists
+                        if ServiceArea.objects.filter(name=name).exists():
+                            errors.append({
+                                'name': name,
+                                'error': f'Service area with name "{name}" already exists'
+                            })
+                            continue
+                        
+                        # Create service area
+                        service_area = ServiceArea.objects.create(
+                            name=name,
+                            is_active=is_active
+                        )
+                        created_areas.append(ServiceAreaSerializer(service_area).data)
+                        
+                    except Exception as e:
+                        errors.append({
+                            'name': item.get('name', 'unknown'),
+                            'error': str(e)
+                        })
+                        logger.error(f"Error creating service area {item.get('name')}: {str(e)}")
+            
+            response_data = {
+                'success': True,
+                'created_count': len(created_areas),
+                'created': created_areas
+            }
+            
+            if errors:
+                response_data['errors'] = errors
+                response_data['error_count'] = len(errors)
+            
+            status_code = status.HTTP_201_CREATED if created_areas else status.HTTP_400_BAD_REQUEST
+            
+            logger.info(
+                f"Bulk create service areas: {len(created_areas)} created, {len(errors)} errors"
+            )
+            
+            return Response(response_data, status=status_code)
+            
+        except Exception as e:
+            logger.error(f"Error in bulk create service areas: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'An error occurred while bulk creating service areas: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class BulkCreateServiceIndustryView(APIView):
+    """View to bulk create service industries"""
+    permission_classes = [IsAdminPermission]
+    
+    def post(self, request):
+        """
+        Bulk create service industries
+        Expected payload:
+        {
+            "service_industries": [
+                {"name": "Industry 1", "price": 100.50, "is_active": true},
+                {"name": "Industry 2", "price": 200.00, "is_active": true},
+                {"name": "Industry 3", "price": 150.75}
+            ]
+        }
+        """
+        try:
+            serializer = BulkServiceIndustrySerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            service_industries_data = serializer.validated_data['service_industries']
+            created_industries = []
+            errors = []
+            
+            with transaction.atomic():
+                for item in service_industries_data:
+                    try:
+                        name = item['name']
+                        # Price defaults to 0 if not provided
+                        price = item.get('price', Decimal('0.00'))
+                        is_active = item.get('is_active', True)
+                        
+                        # Validate price is not negative
+                        if price < 0:
+                            errors.append({
+                                'name': name,
+                                'error': 'Price must be a positive number'
+                            })
+                            continue
+                        
+                        # Check if service industry already exists
+                        if ServiceIndustry.objects.filter(name=name).exists():
+                            errors.append({
+                                'name': name,
+                                'error': f'Service industry with name "{name}" already exists'
+                            })
+                            continue
+                        
+                        # Create service industry
+                        service_industry = ServiceIndustry.objects.create(
+                            name=name,
+                            price=price,
+                            is_active=is_active
+                        )
+                        created_industries.append(ServiceIndustrySerializer(service_industry).data)
+                        
+                    except (InvalidOperation, ValueError, TypeError) as e:
+                        errors.append({
+                            'name': item.get('name', 'unknown'),
+                            'error': f'Invalid price format: {str(e)}'
+                        })
+                        logger.error(f"Error creating service industry {item.get('name')}: {str(e)}")
+                    except Exception as e:
+                        errors.append({
+                            'name': item.get('name', 'unknown'),
+                            'error': str(e)
+                        })
+                        logger.error(f"Error creating service industry {item.get('name')}: {str(e)}")
+            
+            response_data = {
+                'success': True,
+                'created_count': len(created_industries),
+                'created': created_industries
+            }
+            
+            if errors:
+                response_data['errors'] = errors
+                response_data['error_count'] = len(errors)
+            
+            status_code = status.HTTP_201_CREATED if created_industries else status.HTTP_400_BAD_REQUEST
+            
+            logger.info(
+                f"Bulk create service industries: {len(created_industries)} created, {len(errors)} errors"
+            )
+            
+            return Response(response_data, status=status_code)
+            
+        except Exception as e:
+            logger.error(f"Error in bulk create service industries: {str(e)}", exc_info=True)
+            return Response(
+                {'error': f'An error occurred while bulk creating service industries: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 # User Signup and Login Views

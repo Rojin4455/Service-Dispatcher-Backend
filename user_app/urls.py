@@ -9,6 +9,8 @@ from .views import (
     ServiceIndustryViewSet,
     PublicServiceAreaListView,
     PublicServiceIndustryListView,
+    BulkCreateServiceAreaView,
+    BulkCreateServiceIndustryView,
     UserSignupView,
     UserLoginView,
     UserProfileView,
@@ -40,6 +42,10 @@ urlpatterns = [
     # Public endpoints for signup form
     path('public/service-areas/', PublicServiceAreaListView.as_view(), name='public-service-areas'),
     path('public/service-industries/', PublicServiceIndustryListView.as_view(), name='public-service-industries'),
+    
+    # Bulk create endpoints (Admin only)
+    path('admin/service-areas/bulk-create/', BulkCreateServiceAreaView.as_view(), name='bulk-create-service-areas'),
+    path('admin/service-industries/bulk-create/', BulkCreateServiceIndustryView.as_view(), name='bulk-create-service-industries'),
     
     # User endpoints
     path('signup/', UserSignupView.as_view(), name='user-signup'),

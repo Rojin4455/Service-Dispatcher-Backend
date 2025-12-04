@@ -3,6 +3,7 @@ from rest_framework import serializers
 from django.contrib.auth import authenticate
 from django.contrib.auth.models import User
 from django.contrib.auth.password_validation import validate_password
+from decimal import Decimal
 from .models import ServiceArea, ServiceIndustry, UserProfile, PasswordResetOTP, Job, JobRejection
 
 class UserSerializer(serializers.ModelSerializer):
@@ -72,10 +73,73 @@ class ServiceAreaSerializer(serializers.ModelSerializer):
 
 class ServiceIndustrySerializer(serializers.ModelSerializer):
     """Serializer for ServiceIndustry model"""
+    price = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        required=False,
+        default=Decimal('0.00'),
+        help_text="Price for the service industry (defaults to 0 if not provided)"
+    )
+    
     class Meta:
         model = ServiceIndustry
         fields = ['id', 'name', 'price', 'is_active', 'created_at', 'updated_at']
         read_only_fields = ['id', 'created_at', 'updated_at']
+    
+    def create(self, validated_data):
+        """Create service industry with default price if not provided"""
+        if 'price' not in validated_data or validated_data.get('price') is None:
+            validated_data['price'] = Decimal('0.00')
+        return super().create(validated_data)
+    
+    def update(self, instance, validated_data):
+        """Update service industry, defaulting price to 0 if not provided"""
+        if 'price' in validated_data and validated_data['price'] is None:
+            validated_data['price'] = Decimal('0.00')
+        return super().update(instance, validated_data)
+
+
+class ServiceAreaItemSerializer(serializers.Serializer):
+    """Serializer for individual service area item in bulk create"""
+    name = serializers.CharField(required=True, help_text="Name of the service area")
+    is_active = serializers.BooleanField(required=False, default=True, help_text="Whether the service area is active")
+
+
+class ServiceIndustryItemSerializer(serializers.Serializer):
+    """Serializer for individual service industry item in bulk create"""
+    name = serializers.CharField(required=True, help_text="Name of the service industry")
+    price = serializers.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        required=False,
+        default=Decimal('0.00'),
+        help_text="Price for the service industry (defaults to 0 if not provided)"
+    )
+    is_active = serializers.BooleanField(required=False, default=True, help_text="Whether the service industry is active")
+
+
+class BulkServiceAreaSerializer(serializers.Serializer):
+    """Serializer for bulk creating service areas"""
+    service_areas = ServiceAreaItemSerializer(many=True, min_length=1)
+    
+    def validate_service_areas(self, value):
+        """Validate that each service area has required fields"""
+        for item in value:
+            if 'name' not in item or not item.get('name'):
+                raise serializers.ValidationError("Each service area must have a 'name' field")
+        return value
+
+
+class BulkServiceIndustrySerializer(serializers.Serializer):
+    """Serializer for bulk creating service industries"""
+    service_industries = ServiceIndustryItemSerializer(many=True, min_length=1)
+    
+    def validate_service_industries(self, value):
+        """Validate that each service industry has required fields"""
+        for item in value:
+            if 'name' not in item or not item.get('name'):
+                raise serializers.ValidationError("Each service industry must have a 'name' field")
+        return value
 
 
 class UserProfileSerializer(serializers.ModelSerializer):
