@@ -19,6 +19,9 @@ from django.db.models import ProtectedError
 from decimal import Decimal, InvalidOperation
 from .services import sync_user_to_ghl, send_password_reset_otp_email, sync_profile_custom_fields_to_ghl
 import logging
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +659,7 @@ class AdminUserDetailView(APIView):
             )
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class WalletRechargeWebhookView(APIView):
     """Webhook endpoint to recharge wallet balance based on GHL contact ID"""
     permission_classes = [AllowAny]  # Webhook should be accessible without authentication
@@ -868,6 +872,7 @@ class PasswordResetConfirmView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 
+@method_decorator(csrf_exempt, name='dispatch')
 class JobWebhookView(APIView):
     """Webhook endpoint to receive jobs"""
     permission_classes = [AllowAny]  # Webhook should be accessible without authentication

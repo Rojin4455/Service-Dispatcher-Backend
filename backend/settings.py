@@ -33,7 +33,7 @@ if allowed_hosts_config:
     ALLOWED_HOSTS = [host.strip() for host in allowed_hosts_config.split(',')]
 else:
     # Default to localhost for development
-    ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '44.219.188.247']
 
 
 # Application definition
@@ -53,12 +53,22 @@ INSTALLED_APPS = [
     'corsheaders',
 ]
 
+
 CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3000",
+    "http://localhost:3000",  # React dev server
+    "http://localhost:8080",  # React dev server
     "http://127.0.0.1:3000",
+    "http://44.219.188.247"
 ]
 
+
 CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://44.219.188.247"
+]
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': [
