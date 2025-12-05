@@ -94,55 +94,199 @@ class AdminLoginView(APIView):
 
 # Service Area CRUD Views
 class ServiceAreaViewSet(viewsets.ModelViewSet):
-    """ViewSet for ServiceArea CRUD operations"""
+    """ViewSet for ServiceArea CRUD operations with filtering"""
     queryset = ServiceArea.objects.all()
     serializer_class = ServiceAreaSerializer
     permission_classes = [IsAdminPermission]
 
     def get_queryset(self):
+        """
+        Get queryset with filtering options:
+        - is_active: Filter by active status (true/false)
+        - search: Search by name (case-insensitive partial match)
+        - ordering: Order by field (name, created_at, updated_at) with - prefix for descending
+        Examples:
+            ?is_active=true
+            ?search=cleaning
+            ?ordering=name
+            ?ordering=-created_at
+            ?is_active=true&search=area&ordering=name
+        """
         queryset = ServiceArea.objects.all()
-        # Optional: Filter by is_active if needed
+        
+        # Filter by is_active
         is_active = self.request.query_params.get('is_active', None)
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active.lower() == 'true')
+        
+        # Search by name (case-insensitive partial match)
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        
+        # Ordering
+        ordering = self.request.query_params.get('ordering', 'name')
+        if ordering:
+            # Validate ordering field to prevent SQL injection
+            allowed_fields = ['name', 'created_at', 'updated_at', 'id']
+            if ordering.lstrip('-') in allowed_fields:
+                queryset = queryset.order_by(ordering)
+        
         return queryset
 
 
 class PublicServiceAreaListView(APIView):
-    """Public endpoint to get active service areas for signup form"""
+    """Public endpoint to get service areas with filtering"""
     permission_classes = [AllowAny]
 
     def get(self, request):
-        """Get all active service areas"""
-        service_areas = ServiceArea.objects.filter(is_active=True).order_by('name')
-        serializer = ServiceAreaSerializer(service_areas, many=True)
+        """
+        Get service areas with filtering options:
+        - is_active: Filter by active status (true/false, default: true)
+        - search: Search by name (case-insensitive partial match)
+        - ordering: Order by field (name, created_at, updated_at) with - prefix for descending
+        Examples:
+            ?is_active=true
+            ?search=cleaning
+            ?ordering=name
+            ?is_active=true&search=area&ordering=-created_at
+        """
+        # Default to active only for public endpoint
+        is_active_param = self.request.query_params.get('is_active', 'true')
+        queryset = ServiceArea.objects.filter(is_active=is_active_param.lower() == 'true')
+        
+        # Search by name
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        
+        # Ordering (default to name)
+        ordering = self.request.query_params.get('ordering', 'name')
+        allowed_fields = ['name', 'created_at', 'updated_at', 'id']
+        if ordering.lstrip('-') in allowed_fields:
+            queryset = queryset.order_by(ordering)
+        else:
+            queryset = queryset.order_by('name')
+        
+        serializer = ServiceAreaSerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
 # Service Industry CRUD Views
 class ServiceIndustryViewSet(viewsets.ModelViewSet):
-    """ViewSet for ServiceIndustry CRUD operations"""
+    """ViewSet for ServiceIndustry CRUD operations with filtering"""
     queryset = ServiceIndustry.objects.all()
     serializer_class = ServiceIndustrySerializer
     permission_classes = [IsAdminPermission]
 
     def get_queryset(self):
+        """
+        Get queryset with filtering options:
+        - is_active: Filter by active status (true/false)
+        - search: Search by name (case-insensitive partial match)
+        - min_price: Filter by minimum price
+        - max_price: Filter by maximum price
+        - ordering: Order by field (name, price, created_at, updated_at) with - prefix for descending
+        Examples:
+            ?is_active=true
+            ?search=cleaning
+            ?min_price=50&max_price=200
+            ?ordering=price
+            ?ordering=-created_at
+            ?is_active=true&search=inspection&min_price=100&ordering=name
+        """
         queryset = ServiceIndustry.objects.all()
-        # Optional: Filter by is_active if needed
+        
+        # Filter by is_active
         is_active = self.request.query_params.get('is_active', None)
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active.lower() == 'true')
+        
+        # Search by name (case-insensitive partial match)
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        
+        # Filter by minimum price
+        min_price = self.request.query_params.get('min_price', None)
+        if min_price:
+            try:
+                queryset = queryset.filter(price__gte=Decimal(str(min_price)))
+            except (ValueError, InvalidOperation):
+                pass  # Ignore invalid min_price
+        
+        # Filter by maximum price
+        max_price = self.request.query_params.get('max_price', None)
+        if max_price:
+            try:
+                queryset = queryset.filter(price__lte=Decimal(str(max_price)))
+            except (ValueError, InvalidOperation):
+                pass  # Ignore invalid max_price
+        
+        # Ordering
+        ordering = self.request.query_params.get('ordering', 'name')
+        if ordering:
+            # Validate ordering field to prevent SQL injection
+            allowed_fields = ['name', 'price', 'created_at', 'updated_at', 'id']
+            if ordering.lstrip('-') in allowed_fields:
+                queryset = queryset.order_by(ordering)
+        
         return queryset
 
 
 class PublicServiceIndustryListView(APIView):
-    """Public endpoint to get active service industries for signup form"""
+    """Public endpoint to get service industries with filtering"""
     permission_classes = [AllowAny]
 
     def get(self, request):
-        """Get all active service industries"""
-        service_industries = ServiceIndustry.objects.filter(is_active=True).order_by('name')
-        serializer = ServiceIndustrySerializer(service_industries, many=True)
+        """
+        Get service industries with filtering options:
+        - is_active: Filter by active status (true/false, default: true)
+        - search: Search by name (case-insensitive partial match)
+        - min_price: Filter by minimum price
+        - max_price: Filter by maximum price
+        - ordering: Order by field (name, price, created_at, updated_at) with - prefix for descending
+        Examples:
+            ?is_active=true
+            ?search=cleaning
+            ?min_price=50&max_price=200
+            ?ordering=price
+            ?is_active=true&search=inspection&min_price=100&ordering=-price
+        """
+        # Default to active only for public endpoint
+        is_active_param = self.request.query_params.get('is_active', 'true')
+        queryset = ServiceIndustry.objects.filter(is_active=is_active_param.lower() == 'true')
+        
+        # Search by name
+        search = self.request.query_params.get('search', None)
+        if search:
+            queryset = queryset.filter(name__icontains=search)
+        
+        # Filter by minimum price
+        min_price = self.request.query_params.get('min_price', None)
+        if min_price:
+            try:
+                queryset = queryset.filter(price__gte=Decimal(str(min_price)))
+            except (ValueError, InvalidOperation):
+                pass  # Ignore invalid min_price
+        
+        # Filter by maximum price
+        max_price = self.request.query_params.get('max_price', None)
+        if max_price:
+            try:
+                queryset = queryset.filter(price__lte=Decimal(str(max_price)))
+            except (ValueError, InvalidOperation):
+                pass  # Ignore invalid max_price
+        
+        # Ordering (default to name)
+        ordering = self.request.query_params.get('ordering', 'name')
+        allowed_fields = ['name', 'price', 'created_at', 'updated_at', 'id']
+        if ordering.lstrip('-') in allowed_fields:
+            queryset = queryset.order_by(ordering)
+        else:
+            queryset = queryset.order_by('name')
+        
+        serializer = ServiceIndustrySerializer(queryset, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
 
@@ -1365,50 +1509,8 @@ class UpdateJobStatusView(APIView):
             job.save()
             
             logger.info(
-                f"Job {job.id} ({job.name}) status updated from {old_status} to {new_status} by user {request.user.email}"
+                f"Job {job.id} ({job.service_needed or job.name}) status updated from {old_status} to {new_status} by user {request.user.email}"
             )
-            
-            # If job is cancelled, refund the price to user's wallet
-            if new_status == 'cancelled':
-                try:
-                    profile = request.user.profile
-                    with transaction.atomic():
-                        old_balance = profile.wallet_balance
-                        profile.wallet_balance += job.price
-                        profile.save(update_fields=['wallet_balance'])
-                        
-                        logger.info(
-                            f"Job {job.id} cancelled. Refunded {job.price} to user {request.user.email}. "
-                            f"Old balance: {old_balance}, New balance: {profile.wallet_balance}"
-                        )
-                        
-                        # Sync custom fields to GHL (especially wallet balance)
-                        try:
-                            from .services import sync_profile_custom_fields_to_ghl
-                            ghl_custom_fields = sync_profile_custom_fields_to_ghl(profile)
-                            if ghl_custom_fields:
-                                logger.info(f"Successfully synced custom fields after job cancellation for user {request.user.email}")
-                            else:
-                                logger.warning(f"Failed to sync custom fields after job cancellation for user {request.user.email}")
-                        except Exception as e:
-                            # Log error but don't fail the status update
-                            logger.error(f"Error syncing custom fields after job cancellation: {str(e)}")
-                        
-                        return Response({
-                            'success': True,
-                            'message': 'Job status updated and amount refunded to wallet',
-                            'job': JobSerializer(job).data,
-                            'wallet_balance': str(profile.wallet_balance),
-                            'amount_refunded': str(job.price)
-                        }, status=status.HTTP_200_OK)
-                        
-                except UserProfile.DoesNotExist:
-                    logger.warning(f"User profile not found for refund. Job status updated but refund failed.")
-                    return Response({
-                        'success': True,
-                        'message': 'Job status updated, but refund failed (profile not found)',
-                        'job': JobSerializer(job).data
-                    }, status=status.HTTP_200_OK)
             
             return Response({
                 'success': True,
